@@ -1,0 +1,3 @@
+setup-apkrepos -cf  
+apk update  
+apk add vsftpd
