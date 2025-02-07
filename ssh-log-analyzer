@@ -1,0 +1,188 @@
+#!/usr/bin/python3
+"""
+SSH Log Analyzer
+
+This script analyzes SSH log files to identify and summarize failed login attempts.
+It can process standard SSH log formats from various Linux distributions and
+provides a detailed summary of failed authentication attempts, including IP
+addresses, usernames, and timestamps.
+
+The script can either analyze a specified log file or automatically search for
+SSH logs in common system locations.
+
+Usage:
+    ./script.py [path_to_log_file]
+
+If no log file is specified, the script will attempt to find logs in common
+locations such as /var/log/auth.log, /var/log/secure, or /var/log/syslog.
+"""
+
+import re
+import sys
+from datetime import datetime
+
+def analyze_ssh_log(log_file):
+    """
+    Analyze an SSH log file for failed login attempts.
+
+    This function parses the specified log file and extracts information about
+    failed SSH authentication attempts, including timestamps, IP addresses,
+    and usernames.
+
+    Args:
+        log_file (str): Path to the SSH log file to analyze.
+
+    Returns:
+        list[dict] | None: A list of dictionaries containing information about
+            each failed attempt, with keys:
+            - 'timestamp': Time of the attempt
+            - 'ip': Source IP address
+            - 'username': Attempted username
+            - 'raw_log': Complete log line
+            Returns None if the file cannot be accessed.
+
+    Raises:
+        FileNotFoundError: If the specified log file does not exist.
+        PermissionError: If the script lacks permission to read the log file.
+    """
+    # Patterns to match failed SSH attempts
+    failure_patterns = [
+        r"Failed password",
+        r"Failed publickey",
+        r"Invalid user",
+        r"authentication failure",
+        r"Connection closed by authenticating user"
+    ]
+    
+    # Compile patterns for better performance
+    patterns = [re.compile(pattern) for pattern in failure_patterns]
+    
+    failed_attempts = []
+    
+    try:
+        with open(log_file, 'r') as f:
+            for line in f:
+                # Check if line contains any of our failure patterns
+                for pattern in patterns:
+                    if pattern.search(line):
+                        # Extract timestamp, username, and IP if available
+                        timestamp_match = re.search(r'(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})', line)
+                        ip_match = re.search(r'from\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', line)
+                        user_match = re.search(r'for\s+(invalid\s+user\s+)?(\w+)', line)
+                        
+                        timestamp = timestamp_match.group(1) if timestamp_match else "Unknown Time"
+                        ip = ip_match.group(1) if ip_match else "Unknown IP"
+                        username = user_match.group(2) if user_match else "Unknown User"
+                        
+                        failed_attempts.append({
+                            'timestamp': timestamp,
+                            'ip': ip,
+                            'username': username,
+                            'raw_log': line.strip()
+                        })
+                        break
+
+        return failed_attempts
+
+    except FileNotFoundError:
+        print(f"Error: Could not find log file {log_file}")
+        return None
+    except PermissionError:
+        print(f"Error: No permission to read {log_file}")
+        return None
+
+def print_summary(failed_attempts):
+    """
+    Print a formatted summary of failed SSH login attempts.
+
+    This function generates a human-readable report of failed SSH authentication
+    attempts, including:
+    - Total number of failed attempts
+    - Top 5 IP addresses with the most attempts
+    - Top 5 attempted usernames
+    - Details of the 5 most recent attempts
+
+    Args:
+        failed_attempts (list[dict]): List of dictionaries containing failed
+            attempt information, as returned by analyze_ssh_log().
+
+    Returns:
+        None
+    """
+    if not failed_attempts:
+        print("No failed SSH attempts found.")
+        return
+
+    print("\n=== SSH Failed Login Attempts Summary ===")
+    print(f"Total Failed Attempts: {len(failed_attempts)}")
+    
+    # Count attempts by IP
+    ip_counts = {}
+    user_counts = {}
+    
+    for attempt in failed_attempts:
+        ip_counts[attempt['ip']] = ip_counts.get(attempt['ip'], 0) + 1
+        user_counts[attempt['username']] = user_counts.get(attempt['username'], 0) + 1
+    
+    print("\nTop IPs with failed attempts:")
+    for ip, count in sorted(ip_counts.items(), key=lambda x: x[1], reverse=True)[:5]:
+        print(f"  {ip}: {count} attempts")
+    
+    print("\nTop usernames tried:")
+    for user, count in sorted(user_counts.items(), key=lambda x: x[1], reverse=True)[:5]:
+        print(f"  {user}: {count} attempts")
+    
+    print("\nMost recent failed attempts:")
+    for attempt in failed_attempts[-5:]:
+        print(f"\nTime: {attempt['timestamp']}")
+        print(f"IP: {attempt['ip']}")
+        print(f"Username: {attempt['username']}")
+        print(f"Log: {attempt['raw_log']}")
+
+def main():
+    """
+    Main function to orchestrate the SSH log analysis.
+
+    This function handles:
+    - Processing command-line arguments for custom log file paths
+    - Searching for SSH logs in common system locations if no path is specified
+    - Calling the analysis and summary functions
+    - Handling errors and providing usage information
+
+    The script will exit with status code 1 if no log files can be accessed.
+
+    Returns:
+        None
+    """
+    # Common locations for SSH logs
+    log_locations = [
+        '/var/log/auth.log',      # Debian/Ubuntu
+        '/var/log/secure',        # RedHat/CentOS
+        '/var/log/syslog',        # Some systems store SSH logs here
+    ]
+    
+    # Try to find and analyze the SSH log file
+    failed_attempts = None
+    
+    # If log file is provided as argument, use that
+    if len(sys.argv) > 1:
+        failed_attempts = analyze_ssh_log(sys.argv[1])
+    else:
+        # Try common log locations
+        for log_file in log_locations:
+            try:
+                failed_attempts = analyze_ssh_log(log_file)
+                if failed_attempts is not None:
+                    break
+            except:
+                continue
+    
+    if failed_attempts is None:
+        print("Could not access any SSH log files. Try running with sudo or specify the log file location:")
+        print(f"Usage: {sys.argv[0]} [path_to_log_file]")
+        sys.exit(1)
+    
+    print_summary(failed_attempts)
+
+if __name__ == "__main__":
+    main()
